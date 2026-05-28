@@ -27,7 +27,7 @@
 - Closed without merge **workflow is skipped**
 
 ### :two: Required labels for normal releases
-> **For any PR that changes one or more modules under [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure) and is meant to be released, you must add exactly one semantic‑versioning label:**
+> **For any PR that changes one or more modules under [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/) and is meant to be released, you must add exactly one semantic‑versioning label:**
 
 - :label: semver:major
 
@@ -82,7 +82,7 @@
 
 > **If first_module_tag is present, an extra step runs that:**
 
-- Scans all module directories under [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure) that have a main.tf.
+- Scans all module directories under [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/) that have a main.tf.
 
 - Finds modules with no tags yet.
 
@@ -102,13 +102,13 @@
 
 - It inspects changed files in that range.
 
-- Any file whose path matches [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure) is treated as part of a module, where the module path is [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure)
+- Any file whose path matches [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/) is treated as part of a module, where the module path is [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/)
 
 > **Then it splits them into:**
 
 Existing modules: modules that already have one or more tags matching <module_path>/v* (e.g. azure/network/vpc/v1.2.3).
 
-New modules: modules under [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure) that have no tags yet.
+New modules: modules under [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/) that have no tags yet.
 
 If no modules are detected, the workflow exits early and does nothing.
 
@@ -194,7 +194,7 @@ chore: auto tag modules on PR merge (<bump_type>)
 ### :seven: How to use this in practice
 **Normal module change**
 
-:one: Open a PR that changes one or more modules under [azure](https://github.com/EmpireLife/backoffice-infrastructure/tree/main/azure)
+:one: Open a PR that changes one or more modules under [azure](https://github.com/Emyode-Annapurna/global-modules-registry/tree/main/azure/)
 
 :two: Add exactly one of:
 
