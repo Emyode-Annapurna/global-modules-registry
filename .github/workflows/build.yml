@@ -1,0 +1,73 @@
+name: Terraform Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Ref/branch to lint (optional)"
+        required: false
+        type: string
+
+jobs:
+  terraform-lint:
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed .tf files (PR/push only)
+        id: changed
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: tj-actions/changed-files@v47
+        with:
+          files: |
+            azure/**/*.tf
+
+      - name: Debug changed files
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        run: |
+          echo "all_modified_files: '${{ steps.changed.outputs.all_modified_files }}'"
+          echo "all_modified_files_count: '${{ steps.changed.outputs.all_modified_files_count }}'"
+          echo "any_modified: '${{ steps.changed.outputs.any_modified }}'"
+
+      - name: Stop early if no tf changes (PR/push only)
+        if: ${{ github.event_name != 'workflow_dispatch' && steps.changed.outputs.all_modified_files_count == '0' }}
+        run: echo "No Terraform changes, nothing to lint."
+
+      - name: Set up Terraform
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changed.outputs.all_modified_files_count != '0' }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Lint & validate modules
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changed.outputs.all_modified_files_count != '0' }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run: linting all modules under azure/"
+            DIRS=$(find azure -type f -name '*.tf' -printf '%h\n' | sort -u)
+          else
+            CHANGED_TF_FILES="${{ steps.changed.outputs.all_modified_files }}"
+            echo "Changed TF files:"
+            echo "$CHANGED_TF_FILES"
+            DIRS=$(echo "$CHANGED_TF_FILES" | xargs -n1 dirname | sort -u)
+          fi
+
+          for dir in $DIRS; do
+            echo "Running fmt & validate in $dir"
+            terraform -chdir="$dir" fmt -check
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
