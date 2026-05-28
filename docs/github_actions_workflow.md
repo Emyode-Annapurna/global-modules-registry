@@ -2,7 +2,7 @@
 
 #### :one: Tagging and labels for module releases
 
-[tag_modules_on_pr_merge](https://github.com/EmpireLife/backoffice-infrastructure/blob/main/.github/workflows/tag_modules_on_pr_merge.yml)
+[tag_modules](https://github.com/Emyode-Annapurna/global-modules-registry/blob/main/.github/workflows/tag_modules.yml)
 
 - This workflow automatically tags Terraform modules when a pull request (PR) is merged into
 > **It relies heavily on labels on the PR to decide what to do**
