@@ -1,0 +1,360 @@
+name: Tag modules on PR merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  tag-modules:
+    # Run only if PR is merged AND does NOT have the "skip-module-tag" label
+    if: >
+      github.event.pull_request.merged == true && !contains(join(github.event.pull_request.labels.*.name, ' '), 'skip-module-tag')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute PR commit range
+        id: range
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.merge_commit_sha }}"
+
+          if [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          fi
+
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "Range: $base_sha..$head_sha"
+
+      - name: Detect changed modules
+        id: modules
+        run: |
+          base_sha="${{ steps.range.outputs.base_sha }}"
+          head_sha="${{ steps.range.outputs.head_sha }}"
+
+          if [ -z "$base_sha" ] || [ -z "$head_sha" ]; then
+            echo "modules=" >> "$GITHUB_OUTPUT"
+            echo "modules_existing=" >> "$GITHUB_OUTPUT"
+            echo "modules_new=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files=$(git diff --name-only "$base_sha" "$head_sha")
+          echo "Changed files:"
+          echo "$changed_files"
+
+          modules=()
+
+          while IFS= read -r f; do
+            if [[ "$f" =~ ^azure/[^/]+/[^/]+/ ]]; then
+              mod="$(echo "$f" | cut -d'/' -f1-3)"
+              modules+=("$mod")
+            fi
+          done <<< "$changed_files"
+
+          if [ "${#modules[@]}" -eq 0 ]; then
+            echo "modules=" >> "$GITHUB_OUTPUT"
+            echo "modules_existing=" >> "$GITHUB_OUTPUT"
+            echo "modules_new=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf "%s\n" "${modules[@]}" | sort -u > modules.txt
+          echo "Modules touched by PR:"
+          cat modules.txt
+
+          > modules_existing.txt
+          > modules_new.txt
+
+          while IFS= read -r m; do
+            if git tag --list "${m}/v*" | grep -q .; then
+              echo "$m" >> modules_existing.txt
+            else
+              echo "$m" >> modules_new.txt
+            fi
+          done < modules.txt
+
+          if [ -s modules_existing.txt ]; then
+            mods_existing_csv=$(paste -sd, modules_existing.txt)
+            echo "modules_existing=$mods_existing_csv" >> "$GITHUB_OUTPUT"
+          else
+            echo "modules_existing=" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -s modules_new.txt ]; then
+            mods_new_csv=$(paste -sd, modules_new.txt)
+            echo "modules_new=$mods_new_csv" >> "$GITHUB_OUTPUT"
+          else
+            echo "modules_new=" >> "$GITHUB_OUTPUT"
+          fi
+
+          all_csv=""
+          if [ -s modules_existing.txt ]; then
+            all_csv=$(paste -sd, modules_existing.txt)
+          fi
+          if [ -s modules_new.txt ]; then
+            if [ -n "$all_csv" ]; then
+              all_csv="$all_csv,$(paste -sd, modules_new.txt)"
+            else
+              all_csv=$(paste -sd, modules_new.txt)
+            fi
+          fi
+          echo "modules=$all_csv" >> "$GITHUB_OUTPUT"
+
+      - name: Detect bump type from labels
+        id: bump_type
+        if: steps.modules.outputs.modules != ''
+        run: |
+          labels=$(printf '%s\n' "${{ join(github.event.pull_request.labels.*.name, ' ') }}")
+          echo "PR labels: $labels"
+
+          type=""
+          if echo "$labels" | grep -qi "semver:major"; then
+            type="major"
+          elif echo "$labels" | grep -qi "semver:minor"; then
+            type="minor"
+          elif echo "$labels" | grep -qi "semver:patch"; then
+            type="patch"
+          fi
+
+          if [ -z "$type" ]; then
+            echo "ERROR: No semver label found on the pull request."
+            echo "Please add one of: semver:major, semver:minor, semver:patch."
+            exit 1
+          fi
+
+          echo "type=$type" >> "$GITHUB_OUTPUT"
+          echo "Bump type resolved to: $type"
+
+      - name: Ensure bump script is executable
+        if: steps.modules.outputs.modules != ''
+        run: chmod +x .github/scripts/bump-and-track.sh
+
+      - name: Bump & tag modules from PR
+        if: steps.modules.outputs.modules != ''
+        id: bump_from_pr
+        run: |
+          mkdir -p changelogs
+
+          labels=$(printf '%s\n' "${{ join(github.event.pull_request.labels.*.name, ' ') }}")
+          base_sha="${{ steps.range.outputs.base_sha }}"
+          head_sha="${{ steps.range.outputs.head_sha }}"
+          bump_type_existing="${{ steps.bump_type.outputs.type }}"
+
+          if [ -n "${{ steps.modules.outputs.modules_existing }}" ]; then
+            IFS=',' read -ra MODS_EXIST <<< "${{ steps.modules.outputs.modules_existing }}"
+            for m in "${MODS_EXIST[@]}"; do
+              echo "Tagging existing module: $m (bump: $bump_type_existing)"
+
+              LAST_TAG=$(git tag --list "${m}/v*" --sort=-v:refname | head -n1 || true)
+              LAST_VER=""
+              if [ -n "$LAST_TAG" ]; then
+                LAST_VER="${LAST_TAG##*/}"
+              fi
+
+              .github/scripts/bump-and-track.sh "$m" "$bump_type_existing"
+
+              NEW_TAG=$(git tag --list "${m}/v*" --sort=-v:refname | head -n1 || true)
+              NEW_VER="${NEW_TAG##*/}"
+
+              echo "Module $m bumped from $LAST_VER to $NEW_VER (tag: $NEW_TAG)"
+
+              RELEASE_DATE=$(
+                git show -s "${NEW_TAG}" \
+                | awk '/^Date:/ {print $2, $3, $4, $6}' \
+                || echo "unknown"
+              )
+
+              base_name=$(echo "$m" | tr '/' '_')
+              fname="changelogs/${base_name}.md"
+
+              if [ ! -f "$fname" ]; then
+                echo "# Changelog – ${m}" > "$fname"
+                echo "" >> "$fname"
+              fi
+
+              {
+                echo "## ${NEW_VER}"
+                echo ""
+                echo "Release date: ${RELEASE_DATE}"
+                echo ""
+                echo "### Summary"
+                echo ""
+                echo "- Changes affecting this module in the merged pull request."
+                echo ""
+                echo "### Changes"
+                echo ""
+                echo "#### All commits"
+                echo ""
+                git log --pretty=format:'- %h %s' "$base_sha".."$head_sha" -- "$m" || echo "- No commits for this module in the PR range."
+                echo ""
+                echo "### Links"
+                echo ""
+                echo "- Module: \`${m}\`"
+                echo "- Tag: \`${NEW_TAG}\`"
+                echo ""
+              } >> "$fname"
+            done
+          fi
+
+          if [ -n "${{ steps.modules.outputs.modules_new }}" ]; then
+            if echo "$labels" | grep -qi "first_module_tag"; then
+              bump_type_new="major"
+              echo "first_module_tag detected for PR-touched new modules (bump: $bump_type_new)"
+
+              IFS=',' read -ra MODS_NEW <<< "${{ steps.modules.outputs.modules_new }}"
+              for m in "${MODS_NEW[@]}"; do
+                echo "FIRST TAG for module from PR: $m (bump: $bump_type_new)"
+
+                .github/scripts/bump-and-track.sh "$m" "$bump_type_new"
+
+                NEW_TAG=$(git tag --list "${m}/v*" --sort=-v:refname | head -n1 || true)
+                NEW_VER="${NEW_TAG##*/}"
+
+                echo "Module $m first release to $NEW_VER (tag: $NEW_TAG)"
+
+                RELEASE_DATE=$(
+                  git show -s "${NEW_TAG}" \
+                  | awk '/^Date:/ {print $2, $3, $4, $6}' \
+                  || echo "unknown"
+                )
+
+                base_name=$(echo "$m" | tr '/' '_')
+                fname="changelogs/${base_name}.md"
+
+                if [ ! -f "$fname" ]; then
+                  echo "# Changelog – ${m}" > "$fname"
+                  echo "" >> "$fname"
+                fi
+
+                {
+                  echo "## ${NEW_VER}"
+                  echo ""
+                  echo "Release date: ${RELEASE_DATE}"
+                  echo ""
+                  echo "### Summary"
+                  echo ""
+                  echo "- First tagged release for this module in the merged pull request."
+                  echo ""
+                  echo "### Changes"
+                  echo ""
+                  echo "#### All commits"
+                  echo ""
+                  git log --pretty=format:'- %h %s' "$base_sha".."$head_sha" -- "$m" || echo "- No commits for this module in the PR range."
+                  echo ""
+                  echo "### Links"
+                  echo ""
+                  echo "- Module: \`${m}\`"
+                  echo "- Tag: \`${NEW_TAG}\`"
+                  echo ""
+                } >> "$fname"
+              done
+            else
+              echo "New modules were changed but PR has no 'first_module_tag' label. Skipping first release for:"
+              echo "${{ steps.modules.outputs.modules_new }}"
+            fi
+          fi
+
+      - name: Onboard all non-tagged modules (first_module_tag)
+        if: contains(join(github.event.pull_request.labels.*.name, ' '), 'first_module_tag')
+        run: |
+          set -e
+
+          echo "Global onboarding of non-tagged modules (first_module_tag enabled)"
+
+          base_sha="${{ steps.range.outputs.base_sha }}"
+          head_sha="${{ steps.range.outputs.head_sha }}"
+
+          mapfile -t ALL_MODULES < <(find azure -type f -name "main.tf" -printf '%h\n' | sort -u || true)
+
+          echo "ALL_MODULES count: ${#ALL_MODULES[@]}"
+          if [ "${#ALL_MODULES[@]}" -eq 0 ]; then
+            echo "No modules (with main.tf) found under azure/**"
+            exit 0
+          fi
+
+          echo "All module directories:"
+          printf '  - %s\n' "${ALL_MODULES[@]}"
+
+          NON_TAGGED_MODULES=()
+          for m in "${ALL_MODULES[@]}"; do
+            if git tag --list "${m}/v*" | grep -q .; then
+              echo "Already tagged: $m"
+            else
+              echo "No tags yet: $m"
+              NON_TAGGED_MODULES+=("$m")
+            fi
+          done
+
+          echo "NON_TAGGED_MODULES count: ${#NON_TAGGED_MODULES[@]}"
+          if [ "${#NON_TAGGED_MODULES[@]}"] == 0 ]; then
+            echo "No non-tagged modules to onboard."
+            exit 0
+          fi
+
+          echo "Non-tagged modules to onboard:"
+          printf '  - %s\n' "${NON_TAGGED_MODULES[@]}"
+
+          mkdir -p changelogs
+          bump_type_new="major"
+
+          for m in "${NON_TAGGED_MODULES[@]}"; do
+            echo "FIRST TAG for module (global onboarding): $m (bump: $bump_type_new)"
+
+            .github/scripts/bump-and-track.sh "$m" "$bump_type_new"
+
+            NEW_TAG=$(git tag --list "${m}/v*" --sort=-v:refname | head -n1 || true)
+            NEW_VER="${NEW_TAG##*/}"
+
+            echo "Module $m first release to $NEW_VER (tag: $NEW_TAG)"
+
+            base_name=$(echo "$m" | tr '/' '_')
+            fname="changelogs/${base_name}.md"
+
+            if [ ! -f "$fname" ]; then
+              echo "# Changelog – ${m}" > "$fname"
+              echo "" >> "$fname"
+            fi
+
+            {
+              echo "## ${NEW_VER}"
+              echo ""
+              echo "Release date: $(date -u '+%Y-%m-%d')"
+              echo ""
+              echo "### Summary"
+              echo ""
+              echo "- First tagged release for this module (global onboarding)."
+              echo ""
+            } >> "$fname"
+          done
+
+      - name: Commit module_versions.md & changelogs
+        if: steps.modules.outputs.modules != '' || contains(join(github.event.pull_request.labels.*.name, ' '), 'first_module_tag')
+        run: |
+          git add module_versions.md changelogs || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: auto tag modules on PR merge (${{ steps.bump_type.outputs.type }})"
+            git push
+          fi
+
+      - name: Push tags
+        if: steps.modules.outputs.modules != '' || contains(join(github.event.pull_request.labels.*.name, ' '), 'first_module_tag')
+        run: git push --tags
