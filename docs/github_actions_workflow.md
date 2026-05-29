@@ -8,21 +8,21 @@
 > **It relies heavily on labels on the PR to decide what to do**
 
 #### When does the workflow run?
-- The workflow runs when:
+> **The workflow runs when**:
 
  - A pull request targeting main is closed (merged or closed without merge).
 
-- The job only continues if:
+> **The job only continues if**:
 
 - The PR was merged, and
 
-- The PR does not have the unstable label.
+- The PR does not have the skip-module-tag label.
 
 - In other words:
 
-- Merged + no unstable label **tagging logic runs**
+- Merged + no skip-module-tag label **tagging logic runs**
 
-- Merged + unstable label **workflow is skipped**
+- Merged + skip-module-tag label **workflow is skipped**
 
 - Closed without merge **workflow is skipped**
 
@@ -48,11 +48,11 @@
 **This bump type is used only for existing modules that already have tags**
 
 ### :three: Special labels
-:label: unstable
+:label: skip-module-tag
 
-- Use unstable when you do not want any tags or module version changes for this PR.
+- Use skip-module-tag when you do not want any tags or module version changes for this PR.
 
-- If unstable is present, the whole job is skipped, even if:
+- If skip-module-tag is present, the whole job is skipped, even if:
 
 - Modules changed, or
 
@@ -249,5 +249,5 @@ Optionally also add a semver label if existing modules are changed and you want 
 | `semver:major` | Yes (for releases)    | Bumps existing modules by a **major** version when changed in the PR.                      |
 | `semver:minor` | Yes (for releases)    | Bumps existing modules by a **minor** version when changed in the PR.                      |
 | `semver:patch` | Yes (for releases)    | Bumps existing modules by a **patch** version when changed in the PR.                      |
-| `unstable`     | Optional              | Skips the workflow entirely, no tags or changelog updates.                                 |
+| `skip-module-tag`     | Optional              | Skips the workflow entirely, no tags or changelog updates.                                 |
 | `first_module_tag` | Optional          | First-tags new modules touched by the PR and globally onboards all previously untagged modules. |
